@@ -36,7 +36,6 @@ function createPlayer(x,y,color){
     parryCooldown:0,
     parrySuccess:false,
     slowTimer:0
-    lastMissileShot: 0,
   };
 }
 
@@ -69,18 +68,13 @@ function shoot(p){
     x:p.x,y:p.y,
     dx:p.dirX*5,
     dy:p.dirY*5,
-    life:480,
+    life:600,
     owner:p
   });
 }
 
 function fireMissile(p,color){
-  const now = Date.now();
-
   if(p.missiles<=0) return;
-  if(now - p.lastMissileShot < 1000) return; // 🧠 cooldown (1 sec)
-
-  p.lastMissileShot = now;
   p.missiles--;
 
   missiles.push({
@@ -202,12 +196,12 @@ function update(){
     m.life++;
     const target = m.owner===p1?p2:p1;
 
-    if(m.life<300){
+    if(m.life<120){
       const dx=target.x-m.x;
       const dy=target.y-m.y;
       const len=Math.hypot(dx,dy);
-      m.dx += (dx/len)*0.17;
-      m.dy += (dy/len)*0.17;
+      m.dx += (dx/len)*0.15;
+      m.dy += (dy/len)*0.15;
     } else {
       m.dy+=0.15;
     }
