@@ -1,321 +1,423 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Bit Planes Ultra Lite v3</title>
+  <title>Bit Planes Ultra v4</title>
   <style>
-    body { margin:0; overflow:hidden; background:#0b1a2a; }
-    canvas { display:block; margin:auto; background:#111; }
+    body{margin:0;overflow:hidden;background:#0b1a2a;}
+    #ui{position:absolute;top:0;left:0;width:100%;pointer-events:none;}
+    #restartBtn{position:absolute;top:50%;left:50%;transform:translate(-50%,80px);padding:12px 32px;font-size:18px;background:#fff2;border:2px solid white;color:white;border-radius:8px;cursor:pointer;pointer-events:all;display:none;}
+    #controls{position:absolute;bottom:8px;left:50%;transform:translateX(-50%);color:#ffffff55;font:11px monospace;text-align:center;pointer-events:none;}
   </style>
 </head>
 <body>
 <canvas id="game"></canvas>
+<canvas id="ui"></canvas>
+<button id="restartBtn">▶ Play Again</button>
+<div id="controls">P1: WASD move · V shoot · B missile · C parry &nbsp;|&nbsp; P2: Arrows move · , shoot · . missile · / parry</div>
 
 <script>
-const canvas = document.getElementById("game");
-const ctx = canvas.getContext("2d");
+const gc=document.getElementById("game");
+const ctx=gc.getContext("2d");
+const uc=document.getElementById("ui");
+const uctx=uc.getContext("2d");
 
-canvas.width = 1000;
-canvas.height = 600;
+function resize(){
+  const w=window.innerWidth,h=window.innerHeight;
+  gc.width=uc.width=w;
+  gc.height=uc.height=h;
+  gc.style.position=uc.style.position="absolute";
+  gc.style.top=uc.style.top="0";
+  gc.style.left=uc.style.left="0";
+}
+resize();
+window.addEventListener("resize",()=>resize());
 
-function createPlayer(x,y,color){
+const W=()=>gc.width, H=()=>gc.height;
+
+function createPlayer(xFrac,y,color,name){
   return {
-    x,y,
-    vx:0, vy:0,
-    dirX:1, dirY:0,
+    x:W()*xFrac,y,
+    vx:0,vy:0,
+    dirX:color==="cyan"?1:-1,dirY:0,
     baseColor:color,
+    name,
     hp:100,
-    bullets:25,
-    missiles:2,
-    maxBullets:25,
-    maxMissiles:2,
-    lastBulletRegen:0,
-    lastMissileRegen:0,
+    bullets:25,maxBullets:25,
+    missiles:2,maxMissiles:2,
+    lastBulletRegen:0,lastMissileRegen:0,
     lastShot:0,
-    parry:false,
-    parryTimer:0,
-    parryCooldown:0,
-    parrySuccess:false,
-    slowTimer:0
+    parry:false,parryTimer:0,parryCooldown:0,
+    parrySuccess:false,slowTimer:0,
+    trail:[],
+    shieldFlash:0
   };
 }
 
-const p1 = createPlayer(200,300,"cyan");
-const p2 = createPlayer(800,300,"orange");
+let p1,p2,bullets,missiles,particles,keys,gameOver,shields;
 
-const bullets=[];
-const missiles=[];
-const keys={};
-let gameOver=false;
+function init(){
+  p1=createPlayer(0.2,H()/2,"cyan","P1");
+  p2=createPlayer(0.8,H()/2,"orange","P2");
+  bullets=[];
+  missiles=[];
+  particles=[];
+  shields=[
+    {x:W()*0.4,y:H()/2,hp:40,maxHp:40,radius:40},
+    {x:W()*0.6,y:H()/2,hp:40,maxHp:40,radius:40}
+  ];
+  keys={};
+  gameOver=false;
+  document.getElementById("restartBtn").style.display="none";
+}
+init();
 
-document.addEventListener("keydown",e=>keys[e.key.toLowerCase()]=true);
+document.addEventListener("keydown",e=>{
+  keys[e.key.toLowerCase()]=true;
+  if(["arrowup","arrowdown","arrowleft","arrowright"," "].includes(e.key.toLowerCase()))e.preventDefault();
+});
 document.addEventListener("keyup",e=>keys[e.key.toLowerCase()]=false);
 
 function getColor(p){
   const f=Math.max(p.hp,0)/100;
-  if(p.baseColor==="cyan") return `rgb(0,${200*f},${255*f})`;
-  return `rgb(${255*f},${140*f},0)`;
+  if(p.baseColor==="cyan") return `rgb(0,${Math.floor(200*f)},${Math.floor(255*f)})`;
+  return `rgb(${Math.floor(255*f)},${Math.floor(140*f)},0)`;
+}
+
+function spawnParticles(x,y,color,count){
+  for(let i=0;i<count;i++){
+    const a=Math.random()*Math.PI*2;
+    const s=1+Math.random()*3;
+    particles.push({x,y,dx:Math.cos(a)*s,dy:Math.sin(a)*s,life:40+Math.random()*30,maxLife:70,color});
+  }
 }
 
 function shoot(p){
-  if(p.bullets<=0) return;
+  if(p.bullets<=0)return;
   const now=Date.now();
-  if(now-p.lastShot<220) return;
-
-  p.lastShot=now;
-  p.bullets--;
-
-  bullets.push({
-    x:p.x,y:p.y,
-    dx:p.dirX*5,
-    dy:p.dirY*5,
-    life:600,
-    owner:p
-  });
+  if(now-p.lastShot<200)return;
+  p.lastShot=now;p.bullets--;
+  bullets.push({x:p.x,y:p.y,dx:p.dirX*9,dy:p.dirY*9,life:480,owner:p,r:3});
+  spawnParticles(p.x,p.y,p.baseColor==="cyan"?"#0af":"#fa0",3);
 }
 
-function fireMissile(p,color){
-  if(p.missiles<=0) return;
+function fireMissile(p){
+  if(p.missiles<=0)return;
   p.missiles--;
-
-  missiles.push({
-    x:p.x,y:p.y,
-    dx:p.dirX*2,
-    dy:p.dirY*2,
-    owner:p,
-    life:0,
-    color:color
-  });
+  missiles.push({x:p.x,y:p.y,dx:p.dirX*3,dy:p.dirY*3,owner:p,life:0,maxLife:480,trail:[]});
+  spawnParticles(p.x,p.y,"#ff8",6);
 }
 
 function movePlayer(p,ctrl){
-  let ax=0, ay=0;
-
-  if(keys[ctrl.up]) ay-=0.18;
-  if(keys[ctrl.down]) ay+=0.18;
-  if(keys[ctrl.left]) ax-=0.18;
-  if(keys[ctrl.right]) ax+=0.18;
-
-  const speedMult = p.slowTimer>0 ? 0.5 : 1;
-
-  p.vx += ax*speedMult;
-  p.vy += ay*speedMult;
-
-  p.vx *= 0.92;
-  p.vy *= 0.92;
-
-  p.x += p.vx;
-  p.y += p.vy;
-
+  let ax=0,ay=0;
+  if(keys[ctrl.up])ay-=0.28;
+  if(keys[ctrl.down])ay+=0.28;
+  if(keys[ctrl.left])ax-=0.28;
+  if(keys[ctrl.right])ax+=0.28;
+  const sm=p.slowTimer>0?0.45:1;
+  p.vx+=ax*sm; p.vy+=ay*sm;
+  p.vx*=0.94; p.vy*=0.94;
+  const maxSpd=p.slowTimer>0?2.8:6;
+  const spd=Math.hypot(p.vx,p.vy);
+  if(spd>maxSpd){p.vx=p.vx/spd*maxSpd;p.vy=p.vy/spd*maxSpd;}
+  p.x+=p.vx; p.y+=p.vy;
   if(Math.hypot(p.vx,p.vy)>0.1){
-    const len=Math.hypot(p.vx,p.vy);
-    p.dirX=p.vx/len;
-    p.dirY=p.vy/len;
+    const l=Math.hypot(p.vx,p.vy);
+    p.dirX=p.vx/l;p.dirY=p.vy/l;
   }
+  if(p.x<12||p.x>W()-12)p.vx*=-0.5;
+  if(p.y<12||p.y>H()-12)p.vy*=-0.5;
+  p.x=Math.max(12,Math.min(W()-12,p.x));
+  p.y=Math.max(12,Math.min(H()-12,p.y));
 
-  if(p.x<8||p.x>canvas.width-8) p.vx*=-0.4;
-  if(p.y<8||p.y>canvas.height-8) p.vy*=-0.4;
+  p.trail.push({x:p.x,y:p.y});
+  if(p.trail.length>18)p.trail.shift();
 
-  p.x=Math.max(8,Math.min(canvas.width-8,p.x));
-  p.y=Math.max(8,Math.min(canvas.height-8,p.y));
-
-  if(keys[ctrl.shoot]) shoot(p);
-  if(keys[ctrl.missile]) fireMissile(p,"red");
-  if(keys[ctrl.strong]) fireMissile(p,"blue");
-
-  if(keys[ctrl.parry] && p.parryCooldown<=0){
-    p.parry=true;
-    p.parryTimer=45;
-    p.parryCooldown=180;
-    p.parrySuccess=false;
+  if(keys[ctrl.shoot])shoot(p);
+  if(keys[ctrl.missile])fireMissile(p);
+  if(keys[ctrl.parry]&&p.parryCooldown<=0){
+    p.parry=true;p.parryTimer=50;p.parryCooldown=190;p.parrySuccess=false;
+    spawnParticles(p.x,p.y,"#fff",8);
   }
-
   if(p.parryTimer>0){
     p.parryTimer--;
-    if(p.parryTimer===0 && !p.parrySuccess){
-      p.slowTimer=120;
-    }
-  } else p.parry=false;
-
-  if(p.parryCooldown>0) p.parryCooldown--;
-  if(p.slowTimer>0) p.slowTimer--;
+    if(p.parryTimer===0&&!p.parrySuccess)p.slowTimer=130;
+  }else p.parry=false;
+  if(p.parryCooldown>0)p.parryCooldown--;
+  if(p.slowTimer>0)p.slowTimer--;
+  if(p.shieldFlash>0)p.shieldFlash--;
 }
 
 function regen(p){
   const now=Date.now();
-
-  if(now-p.lastBulletRegen>1000 && p.bullets<p.maxBullets){
-    p.bullets++;
-    p.lastBulletRegen=now;
-  }
-
-  if(now-p.lastMissileRegen>10000 && p.missiles<p.maxMissiles){
-    p.missiles++;
-    p.lastMissileRegen=now;
-  }
+  if(now-p.lastBulletRegen>900&&p.bullets<p.maxBullets){p.bullets++;p.lastBulletRegen=now;}
+  if(now-p.lastMissileRegen>12000&&p.missiles<p.maxMissiles){p.missiles++;p.lastMissileRegen=now;}
 }
 
 function update(){
-  if(gameOver) return;
+  if(gameOver)return;
+  movePlayer(p1,{up:"w",down:"s",left:"a",right:"d",shoot:"v",missile:"b",parry:"c"});
+  movePlayer(p2,{up:"arrowup",down:"arrowdown",left:"arrowleft",right:"arrowright",shoot:",",missile:".",parry:"/"});
+  regen(p1);regen(p2);
 
-  movePlayer(p1,{
-    up:"w",down:"s",left:"a",right:"d",
-    shoot:"v", missile:"v", strong:"b", parry:"c"
-  });
+  for(let i=bullets.length-1;i>=0;i--){
+    const b=bullets[i];
+    b.x+=b.dx;b.y+=b.dy;b.life--;
+    if(b.x<0||b.x>W())b.dx*=-1;
+    if(b.y<0||b.y>H())b.dy*=-1;
+    if(b.life<=0){bullets.splice(i,1);continue;}
 
-  movePlayer(p2,{
-    up:"arrowup",down:"arrowdown",
-    left:"arrowleft",right:"arrowright",
-    shoot:",", missile:",", strong:".", parry:"/"
-  });
+    let blockedByShield=false;
+    shields.forEach(s=>{
+      if(s.hp<=0)return;
+      if(Math.hypot(b.x-s.x,b.y-s.y)<s.radius){
+        s.hp=Math.max(0,s.hp-2);
+        spawnParticles(b.x,b.y,"#aaa",3);
+        blockedByShield=true;
+      }
+    });
+    if(blockedByShield){bullets.splice(i,1);continue;}
 
-  regen(p1);
-  regen(p2);
-
-  bullets.forEach(b=>{
-    b.x+=b.dx;
-    b.y+=b.dy;
-    b.life--;
-
-    if(b.x<0||b.x>canvas.width) b.dx*=-1;
-    if(b.y<0||b.y>canvas.height) b.dy*=-1;
-
+    let hit=false;
     [p1,p2].forEach(p=>{
-      if(p!==b.owner && Math.hypot(b.x-p.x,b.y-p.y)<12){
+      if(p!==b.owner&&Math.hypot(b.x-p.x,b.y-p.y)<14){
         if(p.parry){
-          b.dx*=-1; b.dy*=-1;
-          b.owner=p;
-          p.parrySuccess=true;
-        } else {
-          p.hp-=4;
+          b.dx*=-1;b.dy*=-1;b.owner=p;p.parrySuccess=true;
+          spawnParticles(b.x,b.y,"#fff",10);
+        }else{
+          p.hp-=4;spawnParticles(b.x,b.y,p.baseColor==="cyan"?"#0af":"#fa0",5);
+          hit=true;
         }
       }
     });
-  });
+    if(hit)bullets.splice(i,1);
+  }
 
-  missiles.forEach(m=>{
+  for(let i=missiles.length-1;i>=0;i--){
+    const m=missiles[i];
     m.life++;
-    const target = m.owner===p1?p2:p1;
+    if(m.life>m.maxLife){missiles.splice(i,1);continue;}
+    const target=m.owner===p1?p2:p1;
+    if(m.life<130){
+      const dx=target.x-m.x,dy=target.y-m.y;
+      const l=Math.hypot(dx,dy);
+      m.dx+=(dx/l)*0.18;m.dy+=(dy/l)*0.18;
+    }else{m.dy+=0.12;}
+    const mspd=Math.hypot(m.dx,m.dy);
+    if(mspd>7){m.dx=m.dx/mspd*7;m.dy=m.dy/mspd*7;}
+    m.x+=m.dx;m.y+=m.dy;
+    m.trail.push({x:m.x,y:m.y});
+    if(m.trail.length>14)m.trail.shift();
+    if(m.x<0||m.x>W()||m.y<0||m.y>H()){missiles.splice(i,1);continue;}
 
-    if(m.life<120){
-      const dx=target.x-m.x;
-      const dy=target.y-m.y;
-      const len=Math.hypot(dx,dy);
-      m.dx += (dx/len)*0.15;
-      m.dy += (dy/len)*0.15;
-    } else {
-      m.dy+=0.15;
-    }
-
-    m.x+=m.dx;
-    m.y+=m.dy;
-
-    [p1,p2].forEach(p=>{
-      if(p!==m.owner && Math.hypot(m.x-p.x,m.y-p.y)<14){
-        p.hp-=20;
-        m.life=9999;
+    let msBlocked=false;
+    shields.forEach(s=>{
+      if(s.hp<=0)return;
+      if(Math.hypot(m.x-s.x,m.y-s.y)<s.radius){
+        s.hp=Math.max(0,s.hp-20);
+        spawnParticles(m.x,m.y,"#fa8",12);
+        msBlocked=true;
       }
     });
-  });
+    if(msBlocked){missiles.splice(i,1);continue;}
 
-  if(p1.hp <= 0) gameOver = "p2";
-  if(p2.hp <= 0) gameOver = "p1";
-
-  bullets.filter(b=>b.life>0);
-  missiles.filter(m=>m.life<600);
-}
-
-function drawBars(x,y,count,max,color){
-  for(let i=0;i<max;i++){
-    ctx.fillStyle = i<count ? color : "#333";
-    ctx.fillRect(x+i*8,y,6,10);
+    let mhit=false;
+    [p1,p2].forEach(p=>{
+      if(p!==m.owner&&Math.hypot(m.x-p.x,m.y-p.y)<16){
+        p.hp-=22;spawnParticles(m.x,m.y,"#ff4",15);
+        mhit=true;
+      }
+    });
+    if(mhit)missiles.splice(i,1);
   }
-}
 
-function drawMissiles(x,y,count){
-  for(let i=0;i<count;i++){
-    ctx.fillStyle="red";
-    ctx.beginPath();
-    ctx.arc(x+i*14,y,6,0,Math.PI*2);
-    ctx.fill();
+  for(let i=particles.length-1;i>=0;i--){
+    const p=particles[i];
+    p.x+=p.dx;p.y+=p.dy;p.dx*=0.92;p.dy*=0.92;p.life--;
+    if(p.life<=0)particles.splice(i,1);
   }
-}
 
-function drawHealthBar(x,y,hp,color){
-  ctx.fillStyle = "#333";
-  ctx.fillRect(x,y,200,12);
-
-  ctx.fillStyle = color;
-  ctx.fillRect(x,y,Math.max(0,hp)*2,12);
-
-  ctx.strokeStyle="white";
-  ctx.strokeRect(x,y,200,12);
+  if(p1.hp<=0)gameOver="p2";
+  if(p2.hp<=0)gameOver="p1";
+  if(gameOver)document.getElementById("restartBtn").style.display="block";
 }
 
 function drawPlayer(p){
-  ctx.fillStyle = p.parry ? "white" : getColor(p);
-
+  const trail=p.trail;
+  for(let i=0;i<trail.length;i++){
+    const a=(i/trail.length)*0.3;
+    ctx.fillStyle=p.baseColor==="cyan"?`rgba(0,200,255,${a})`:`rgba(255,140,0,${a})`;
+    const s=(i/trail.length)*5;
+    ctx.beginPath();
+    ctx.arc(trail[i].x,trail[i].y,s,0,Math.PI*2);
+    ctx.fill();
+  }
+  if(p.parry){
+    ctx.strokeStyle="rgba(255,255,255,0.8)";
+    ctx.lineWidth=2;
+    ctx.beginPath();
+    ctx.arc(p.x,p.y,20,0,Math.PI*2);
+    ctx.stroke();
+  }
+  if(p.slowTimer>0){
+    ctx.strokeStyle="rgba(255,100,100,0.5)";
+    ctx.lineWidth=2;
+    ctx.setLineDash([4,4]);
+    ctx.beginPath();
+    ctx.arc(p.x,p.y,22,0,Math.PI*2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  ctx.fillStyle=p.parry?"white":getColor(p);
   ctx.beginPath();
-  ctx.moveTo(p.x+p.dirX*20,p.y+p.dirY*20);
-  ctx.lineTo(p.x-p.dirY*12,p.y+p.dirX*12);
-  ctx.lineTo(p.x+p.dirY*12,p.y-p.dirX*12);
+  ctx.moveTo(p.x+p.dirX*22,p.y+p.dirY*22);
+  ctx.lineTo(p.x-p.dirY*13,p.y+p.dirX*13);
+  ctx.lineTo(p.x+p.dirY*13,p.y-p.dirX*13);
   ctx.closePath();
   ctx.fill();
 }
 
-function drawUI(){
-  ctx.font = "14px Arial";
-
-  // P1
-  ctx.fillStyle="cyan";
-  ctx.fillText("P1",20,15);
-  ctx.fillText("Bullets",20,35);
-  drawBars(20,40,p1.bullets,p1.maxBullets,"cyan");
-  ctx.fillText("Missiles",20,65);
-  drawMissiles(20,80,p1.missiles);
-  drawHealthBar(20,105,p1.hp,"cyan");
-
-  // P2
-  ctx.fillStyle="orange";
-  ctx.fillText("P2",920,15);
-  ctx.fillText("Bullets",860,35);
-  drawBars(860,40,p2.bullets,p2.maxBullets,"orange");
-  ctx.fillText("Missiles",860,65);
-  drawMissiles(860,80,p2.missiles);
-  drawHealthBar(780,105,p2.hp,"orange");
+function drawShields(){
+  shields.forEach(s=>{
+    if(s.hp<=0)return;
+    const f=s.hp/s.maxHp;
+    ctx.strokeStyle=`rgba(100,180,255,${0.3+f*0.5})`;
+    ctx.lineWidth=3*f;
+    ctx.beginPath();
+    ctx.arc(s.x,s.y,s.radius,0,Math.PI*2);
+    ctx.stroke();
+    ctx.fillStyle=`rgba(100,180,255,${0.05+f*0.08})`;
+    ctx.fill();
+  });
 }
 
-function draw(){
-  ctx.clearRect(0,0,canvas.width,canvas.height);
+function drawUI(){
+  uctx.clearRect(0,0,W(),H());
+
+  function hbar(x,y,hp,color){
+    uctx.fillStyle="#222";
+    uctx.fillRect(x,y,200,14);
+    uctx.fillStyle=color;
+    uctx.fillRect(x,y,Math.max(0,hp)*2,14);
+    uctx.strokeStyle="#fff4";
+    uctx.lineWidth=1;
+    uctx.strokeRect(x,y,200,14);
+  }
+
+  function pips(x,y,count,max,color){
+    for(let i=0;i<max;i++){
+      uctx.fillStyle=i<count?color:"#333";
+      uctx.fillRect(x+i*9,y,7,11);
+    }
+  }
+
+  function micons(x,y,count,max){
+    for(let i=0;i<max;i++){
+      uctx.fillStyle=i<count?"#ff5533":"#333";
+      uctx.beginPath();
+      uctx.ellipse(x+i*16,y,5,7,0,0,Math.PI*2);
+      uctx.fill();
+      if(i<count){
+        uctx.fillStyle="#ffaa00";
+        uctx.fillRect(x+i*16-1,y-9,2,6);
+      }
+    }
+  }
+
+  const pad=16;
+  uctx.font="bold 13px monospace";
+
+  uctx.fillStyle="#0cf";
+  uctx.fillText("P1",pad,18);
+  uctx.fillStyle="#fff6";
+  uctx.font="10px monospace";
+  uctx.fillText("AMMO",pad,22);
+  pips(pad,24,p1.bullets,p1.maxBullets,"#0cf");
+  uctx.fillText("MISSILES",pad+8,48);
+  micons(pad+8,58,p1.missiles,p1.maxMissiles);
+  uctx.fillText("HP",pad,74);
+  hbar(pad,76,p1.hp,"#0cf");
+
+  const rx=W()-pad-200;
+  uctx.font="bold 13px monospace";
+  uctx.fillStyle="#f90";
+  uctx.fillText("P2",W()-pad-20,18);
+  uctx.fillStyle="#fff6";
+  uctx.font="10px monospace";
+  uctx.fillText("AMMO",rx,22);
+  pips(rx,24,p2.bullets,p2.maxBullets,"#f90");
+  uctx.fillText("MISSILES",rx+8,48);
+  micons(rx+8,58,p2.missiles,p2.maxMissiles);
+  uctx.fillText("HP",rx,74);
+  hbar(rx,76,p2.hp,"#f90");
+
+  if(gameOver){
+    const txt=gameOver==="p1"?"Player 1 Wins!":"Player 2 Wins!";
+    uctx.font="bold 48px monospace";
+    uctx.textAlign="center";
+    uctx.fillStyle="#fff";
+    uctx.shadowColor=gameOver==="p1"?"#0cf":"#f90";
+    uctx.shadowBlur=30;
+    uctx.fillText(txt,W()/2,H()/2);
+    uctx.shadowBlur=0;
+    uctx.textAlign="left";
+  }
+}
+
+function drawScene(){
+  ctx.clearRect(0,0,W(),H());
+  ctx.fillStyle="#0b1a2a";
+  ctx.fillRect(0,0,W(),H());
+
+  ctx.strokeStyle="rgba(255,255,255,0.04)";
+  ctx.lineWidth=1;
+  for(let x=0;x<W();x+=80){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H());ctx.stroke();}
+  for(let y=0;y<H();y+=80){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W(),y);ctx.stroke();}
+
+  drawShields();
+
+  particles.forEach(p=>{
+    const a=p.life/p.maxLife;
+    const hex=Math.floor(a*255).toString(16).padStart(2,"0");
+    ctx.fillStyle=p.color+hex;
+    ctx.beginPath();
+    ctx.arc(p.x,p.y,2,0,Math.PI*2);
+    ctx.fill();
+  });
 
   drawPlayer(p1);
   drawPlayer(p2);
 
   ctx.fillStyle="white";
-  bullets.forEach(b=>ctx.fillRect(b.x,b.y,3,3));
+  bullets.forEach(b=>{ctx.fillRect(b.x-2,b.y-2,4,4);});
 
   missiles.forEach(m=>{
-    ctx.fillStyle = m.color==="red" ? "#ff4444" : "#44aaff";
+    for(let i=0;i<m.trail.length;i++){
+      const a=(i/m.trail.length)*0.7;
+      ctx.fillStyle=`rgba(255,200,50,${a})`;
+      ctx.beginPath();
+      ctx.arc(m.trail[i].x,m.trail[i].y,2,0,Math.PI*2);
+      ctx.fill();
+    }
+    ctx.fillStyle="#ffcc22";
     ctx.beginPath();
-    ctx.arc(m.x,m.y,5,0,Math.PI*2);
+    ctx.arc(m.x,m.y,6,0,Math.PI*2);
+    ctx.fill();
+    ctx.fillStyle="#ff4411";
+    ctx.beginPath();
+    ctx.arc(m.x,m.y,3,0,Math.PI*2);
     ctx.fill();
   });
-
-  drawUI();
-
-  if(gameOver){
-    ctx.fillStyle="white";
-    ctx.font="40px Arial";
-    const text = gameOver==="p1" ? "Player 1 Wins!" : "Player 2 Wins!";
-    ctx.fillText(text,330,300);
-  }
 }
 
 function loop(){
   update();
-  draw();
+  drawScene();
+  drawUI();
   requestAnimationFrame(loop);
 }
 loop();
+
+document.getElementById("restartBtn").addEventListener("click",()=>init());
 </script>
 </body>
 </html>
