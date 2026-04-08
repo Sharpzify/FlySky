@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Bit Planes Ultra Lite v3</title>
+  <style>
+    body { margin:0; overflow:hidden; background:#0b1a2a; }
+    canvas { display:block; margin:auto; background:#111; }
+  </style>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<script>
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+
+canvas.width = 1000;
+canvas.height = 600;
+
+function createPlayer(x,y,color){
+  return {
+    x,y,
+    vx:0, vy:0,
+    dirX:1, dirY:0,
+    baseColor:color,
+    hp:100,
+    bullets:25,
+    missiles:2,
+    maxBullets:25,
+    maxMissiles:2,
+    lastBulletRegen:0,
+    lastMissileRegen:0,
+    lastShot:0,
+    parry:false,
+    parryTimer:0,
+    parryCooldown:0,
+    parrySuccess:false,
+    slowTimer:0
+  };
+}
+
+const p1 = createPlayer(200,300,"cyan");
+const p2 = createPlayer(800,300,"orange");
+
+const bullets=[];
+const missiles=[];
+const keys={};
+let gameOver=false;
+
+document.addEventListener("keydown",e=>keys[e.key.toLowerCase()]=true);
+document.addEventListener("keyup",e=>keys[e.key.toLowerCase()]=false);
+
+function getColor(p){
+  const f=Math.max(p.hp,0)/100;
+  if(p.baseColor==="cyan") return `rgb(0,${200*f},${255*f})`;
+  return `rgb(${255*f},${140*f},0)`;
+}
+
+function shoot(p){
+  if(p.bullets<=0) return;
+  const now=Date.now();
+  if(now-p.lastShot<220) return;
+
+  p.lastShot=now;
+  p.bullets--;
+
+  bullets.push({
+    x:p.x,y:p.y,
+    dx:p.dirX*5,
+    dy:p.dirY*5,
+    life:600,
+    owner:p
+  });
+}
+
+function fireMissile(p,color){
+  if(p.missiles<=0) return;
+  p.missiles--;
+
+  missiles.push({
+    x:p.x,y:p.y,
+    dx:p.dirX*2,
+    dy:p.dirY*2,
+    owner:p,
+    life:0,
+    color:color
+  });
+}
+
+function movePlayer(p,ctrl){
+  let ax=0, ay=0;
+
+  if(keys[ctrl.up]) ay-=0.18;
+  if(keys[ctrl.down]) ay+=0.18;
+  if(keys[ctrl.left]) ax-=0.18;
+  if(keys[ctrl.right]) ax+=0.18;
+
+  const speedMult = p.slowTimer>0 ? 0.5 : 1;
+
+  p.vx += ax*speedMult;
+  p.vy += ay*speedMult;
+
+  p.vx *= 0.92;
+  p.vy *= 0.92;
+
+  p.x += p.vx;
+  p.y += p.vy;
+
+  if(Math.hypot(p.vx,p.vy)>0.1){
+    const len=Math.hypot(p.vx,p.vy);
+    p.dirX=p.vx/len;
+    p.dirY=p.vy/len;
+  }
+
+  if(p.x<8||p.x>canvas.width-8) p.vx*=-0.4;
+  if(p.y<8||p.y>canvas.height-8) p.vy*=-0.4;
+
+  p.x=Math.max(8,Math.min(canvas.width-8,p.x));
+  p.y=Math.max(8,Math.min(canvas.height-8,p.y));
+
+  if(keys[ctrl.shoot]) shoot(p);
+  if(keys[ctrl.missile]) fireMissile(p,"red");
+  if(keys[ctrl.strong]) fireMissile(p,"blue");
+
+  if(keys[ctrl.parry] && p.parryCooldown<=0){
+    p.parry=true;
+    p.parryTimer=45;
+    p.parryCooldown=180;
+    p.parrySuccess=false;
+  }
+
+  if(p.parryTimer>0){
+    p.parryTimer--;
+    if(p.parryTimer===0 && !p.parrySuccess){
+      p.slowTimer=120;
+    }
+  } else p.parry=false;
+
+  if(p.parryCooldown>0) p.parryCooldown--;
+  if(p.slowTimer>0) p.slowTimer--;
+}
+
+function regen(p){
+  const now=Date.now();
+
+  if(now-p.lastBulletRegen>1000 && p.bullets<p.maxBullets){
+    p.bullets++;
+    p.lastBulletRegen=now;
+  }
+
+  if(now-p.lastMissileRegen>10000 && p.missiles<p.maxMissiles){
+    p.missiles++;
+    p.lastMissileRegen=now;
+  }
+}
+
+function update(){
+  if(gameOver) return;
+
+  movePlayer(p1,{
+    up:"w",down:"s",left:"a",right:"d",
+    shoot:"v", missile:"v", strong:"b", parry:"c"
+  });
+
+  movePlayer(p2,{
+    up:"arrowup",down:"arrowdown",
+    left:"arrowleft",right:"arrowright",
+    shoot:",", missile:",", strong:".", parry:"/"
+  });
+
+  regen(p1);
+  regen(p2);
+
+  bullets.forEach(b=>{
+    b.x+=b.dx;
+    b.y+=b.dy;
+    b.life--;
+
+    if(b.x<0||b.x>canvas.width) b.dx*=-1;
+    if(b.y<0||b.y>canvas.height) b.dy*=-1;
+
+    [p1,p2].forEach(p=>{
+      if(p!==b.owner && Math.hypot(b.x-p.x,b.y-p.y)<12){
+        if(p.parry){
+          b.dx*=-1; b.dy*=-1;
+          b.owner=p;
+          p.parrySuccess=true;
+        } else {
+          p.hp-=4;
+        }
+      }
+    });
+  });
+
+  missiles.forEach(m=>{
+    m.life++;
+    const target = m.owner===p1?p2:p1;
+
+    if(m.life<120){
+      const dx=target.x-m.x;
+      const dy=target.y-m.y;
+      const len=Math.hypot(dx,dy);
+      m.dx += (dx/len)*0.15;
+      m.dy += (dy/len)*0.15;
+    } else {
+      m.dy+=0.15;
+    }
+
+    m.x+=m.dx;
+    m.y+=m.dy;
+
+    [p1,p2].forEach(p=>{
+      if(p!==m.owner && Math.hypot(m.x-p.x,m.y-p.y)<14){
+        p.hp-=20;
+        m.life=9999;
+      }
+    });
+  });
+
+  if(p1.hp <= 0) gameOver = "p2";
+  if(p2.hp <= 0) gameOver = "p1";
+
+  bullets.filter(b=>b.life>0);
+  missiles.filter(m=>m.life<600);
+}
+
+function drawBars(x,y,count,max,color){
+  for(let i=0;i<max;i++){
+    ctx.fillStyle = i<count ? color : "#333";
+    ctx.fillRect(x+i*8,y,6,10);
+  }
+}
+
+function drawMissiles(x,y,count){
+  for(let i=0;i<count;i++){
+    ctx.fillStyle="red";
+    ctx.beginPath();
+    ctx.arc(x+i*14,y,6,0,Math.PI*2);
+    ctx.fill();
+  }
+}
+
+function drawHealthBar(x,y,hp,color){
+  ctx.fillStyle = "#333";
+  ctx.fillRect(x,y,200,12);
+
+  ctx.fillStyle = color;
+  ctx.fillRect(x,y,Math.max(0,hp)*2,12);
+
+  ctx.strokeStyle="white";
+  ctx.strokeRect(x,y,200,12);
+}
+
+function drawPlayer(p){
+  ctx.fillStyle = p.parry ? "white" : getColor(p);
+
+  ctx.beginPath();
+  ctx.moveTo(p.x+p.dirX*20,p.y+p.dirY*20);
+  ctx.lineTo(p.x-p.dirY*12,p.y+p.dirX*12);
+  ctx.lineTo(p.x+p.dirY*12,p.y-p.dirX*12);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawUI(){
+  ctx.font = "14px Arial";
+
+  // P1
+  ctx.fillStyle="cyan";
+  ctx.fillText("P1",20,15);
+  ctx.fillText("Bullets",20,35);
+  drawBars(20,40,p1.bullets,p1.maxBullets,"cyan");
+  ctx.fillText("Missiles",20,65);
+  drawMissiles(20,80,p1.missiles);
+  drawHealthBar(20,105,p1.hp,"cyan");
+
+  // P2
+  ctx.fillStyle="orange";
+  ctx.fillText("P2",920,15);
+  ctx.fillText("Bullets",860,35);
+  drawBars(860,40,p2.bullets,p2.maxBullets,"orange");
+  ctx.fillText("Missiles",860,65);
+  drawMissiles(860,80,p2.missiles);
+  drawHealthBar(780,105,p2.hp,"orange");
+}
+
+function draw(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+
+  drawPlayer(p1);
+  drawPlayer(p2);
+
+  ctx.fillStyle="white";
+  bullets.forEach(b=>ctx.fillRect(b.x,b.y,3,3));
+
+  missiles.forEach(m=>{
+    ctx.fillStyle = m.color==="red" ? "#ff4444" : "#44aaff";
+    ctx.beginPath();
+    ctx.arc(m.x,m.y,5,0,Math.PI*2);
+    ctx.fill();
+  });
+
+  drawUI();
+
+  if(gameOver){
+    ctx.fillStyle="white";
+    ctx.font="40px Arial";
+    const text = gameOver==="p1" ? "Player 1 Wins!" : "Player 2 Wins!";
+    ctx.fillText(text,330,300);
+  }
+}
+
+function loop(){
+  update();
+  draw();
+  requestAnimationFrame(loop);
+}
+loop();
+</script>
+</body>
+</html>
